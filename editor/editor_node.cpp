@@ -472,8 +472,7 @@ void EditorNode::_update_from_settings() {
 	bool glow_bicubic = int(GLOBAL_GET("rendering/environment/glow/upscale_mode")) > 0;
 	RS::get_singleton()->environment_set_ssil_quality(RS::EnvironmentSSILQuality(int(GLOBAL_GET("rendering/environment/ssil/quality"))), GLOBAL_GET("rendering/environment/ssil/half_size"), GLOBAL_GET("rendering/environment/ssil/adaptive_target"), GLOBAL_GET("rendering/environment/ssil/blur_passes"), GLOBAL_GET("rendering/environment/ssil/fadeout_from"), GLOBAL_GET("rendering/environment/ssil/fadeout_to"));
 	RS::get_singleton()->environment_glow_set_use_bicubic_upscale(glow_bicubic);
-	RS::EnvironmentSSRRoughnessQuality ssr_roughness_quality = RS::EnvironmentSSRRoughnessQuality(int(GLOBAL_GET("rendering/environment/screen_space_reflection/roughness_quality")));
-	RS::get_singleton()->environment_set_ssr_roughness_quality(ssr_roughness_quality);
+	RS::get_singleton()->environment_set_ssr_half_size(GLOBAL_GET("rendering/environment/screen_space_reflection/half_size"));
 	RS::SubSurfaceScatteringQuality sss_quality = RS::SubSurfaceScatteringQuality(int(GLOBAL_GET("rendering/environment/subsurface_scattering/subsurface_scattering_quality")));
 	RS::get_singleton()->sub_surface_scattering_set_quality(sss_quality);
 	float sss_scale = GLOBAL_GET("rendering/environment/subsurface_scattering/subsurface_scattering_scale");
@@ -937,6 +936,12 @@ void EditorNode::_notification(int p_what) {
 			CanvasItemEditor::ThemePreviewMode theme_preview_mode = (CanvasItemEditor::ThemePreviewMode)(int)EditorSettings::get_singleton()->get_project_metadata("2d_editor", "theme_preview", CanvasItemEditor::THEME_PREVIEW_PROJECT);
 			update_preview_themes(theme_preview_mode);
 
+			// Remember the selected locale to preview node translations.
+			const String preview_locale = EditorSettings::get_singleton()->get_project_metadata("editor_metadata", "preview_locale", String());
+			if (!preview_locale.is_empty() && TranslationServer::get_singleton()->get_loaded_locales().has(preview_locale)) {
+				set_preview_locale(preview_locale);
+			}
+
 			if (Engine::get_singleton()->is_recovery_mode_hint()) {
 				EditorToaster::get_singleton()->popup_str(TTR("Recovery Mode is enabled. Editor functionality has been restricted."), EditorToaster::SEVERITY_WARNING);
 			}
@@ -1016,6 +1021,11 @@ void EditorNode::_notification(int p_what) {
 				recent_scenes->reset_size();
 			}
 
+			if (EditorSettings::get_singleton()->check_changed_settings_in_group("interface/editor")) {
+				theme->set_constant("dragging_unfold_wait_msec", "Tree", (float)EDITOR_GET("interface/editor/dragging_hover_wait_seconds") * 1000);
+				theme->set_constant("hover_switch_wait_msec", "TabBar", (float)EDITOR_GET("interface/editor/dragging_hover_wait_seconds") * 1000);
+			}
+
 			if (EditorSettings::get_singleton()->check_changed_settings_in_group("interface/editor/dock_tab_style")) {
 				editor_dock_manager->update_tab_styles();
 			}
@@ -1086,8 +1096,8 @@ void EditorNode::_update_update_spinner() {
 		// as this feature should only be enabled for troubleshooting purposes.
 		// Make the icon modulate color overbright because icons are not completely white on a dark theme.
 		// On a light theme, icons are dark, so we need to modulate them with an even brighter color.
-		const bool dark_theme = EditorThemeManager::is_dark_theme();
-		update_spinner->set_self_modulate(theme->get_color(SNAME("error_color"), EditorStringName(Editor)) * (dark_theme ? Color(1.1, 1.1, 1.1) : Color(4.25, 4.25, 4.25)));
+		const bool dark_icon_and_font = EditorThemeManager::is_dark_icon_and_font();
+		update_spinner->set_self_modulate(theme->get_color(SNAME("error_color"), EditorStringName(Editor)) * (dark_icon_and_font ? Color(1.1, 1.1, 1.1) : Color(4.25, 4.25, 4.25)));
 	} else {
 		update_spinner->set_tooltip_text(TTRC("Spins when the editor window redraws."));
 		update_spinner->set_self_modulate(Color(1, 1, 1));
@@ -1546,7 +1556,12 @@ Error EditorNode::load_resource(const String &p_resource, bool p_ignore_broken_d
 	Error err;
 
 	Ref<Resource> res;
-	if (ResourceLoader::exists(p_resource, "")) {
+	if (force_textfile_extensions.has(p_resource.get_extension())) {
+		res = ResourceCache::get_ref(p_resource);
+		if (res.is_null() || !res->is_class("TextFile")) {
+			res = ScriptEditor::get_singleton()->open_file(p_resource);
+		}
+	} else if (ResourceLoader::exists(p_resource, "")) {
 		res = ResourceLoader::load(p_resource, "", ResourceFormatLoader::CACHE_MODE_REUSE, &err);
 	} else if (textfile_extensions.has(p_resource.get_extension())) {
 		res = ScriptEditor::get_singleton()->open_file(p_resource);
@@ -3532,7 +3547,7 @@ void EditorNode::_menu_option_confirm(int p_option, bool p_confirmed) {
 			about->popup_centered(Size2(780, 500) * EDSCALE);
 		} break;
 		case HELP_SUPPORT_GODOT_DEVELOPMENT: {
-			OS::get_singleton()->shell_open("https://fund.godotengine.org");
+			OS::get_singleton()->shell_open("https://fund.godotengine.org/?ref=help_menu");
 		} break;
 	}
 }
@@ -4216,6 +4231,8 @@ void EditorNode::set_preview_locale(const String &p_locale) {
 		main_domain->set_enabled(true);
 		main_domain->set_locale_override(p_locale);
 	}
+
+	EditorSettings::get_singleton()->set_project_metadata("editor_metadata", "preview_locale", p_locale);
 
 	_translation_resources_changed();
 }
@@ -5249,7 +5266,7 @@ void EditorNode::_pick_main_scene_custom_action(const String &p_custom_action_na
 	}
 }
 
-Ref<Texture2D> EditorNode::_get_class_or_script_icon(const String &p_class, const String &p_script_path, const String &p_fallback, bool p_fallback_script_to_theme) {
+Ref<Texture2D> EditorNode::_get_class_or_script_icon(const String &p_class, const String &p_script_path, const String &p_fallback, bool p_fallback_script_to_theme, bool p_skip_fallback_virtual) {
 	ERR_FAIL_COND_V_MSG(p_class.is_empty(), nullptr, "Class name cannot be empty.");
 	EditorData &ed = EditorNode::get_editor_data();
 
@@ -5272,8 +5289,9 @@ Ref<Texture2D> EditorNode::_get_class_or_script_icon(const String &p_class, cons
 					base_type = scr->get_instance_base_type();
 				}
 			}
-			if (theme.is_valid() && theme->has_icon(base_type, EditorStringName(EditorIcons))) {
-				return theme->get_icon(base_type, EditorStringName(EditorIcons));
+			if (theme.is_valid()) {
+				bool instantiable = !ClassDB::is_virtual(p_class) && ClassDB::can_instantiate(p_class);
+				return _get_class_or_script_icon(base_type, "", "", false, p_skip_fallback_virtual || instantiable);
 			}
 		}
 	}
@@ -5307,11 +5325,20 @@ Ref<Texture2D> EditorNode::_get_class_or_script_icon(const String &p_class, cons
 
 		// If the fallback is empty or wasn't found, use the default fallback.
 		if (ClassDB::class_exists(p_class)) {
-			bool instantiable = !ClassDB::is_virtual(p_class) && ClassDB::can_instantiate(p_class);
-			if (ClassDB::is_parent_class(p_class, SNAME("Node"))) {
-				return theme->get_icon(instantiable ? "Node" : "NodeDisabled", EditorStringName(EditorIcons));
-			} else {
-				return theme->get_icon(instantiable ? "Object" : "ObjectDisabled", EditorStringName(EditorIcons));
+			if (!p_skip_fallback_virtual) {
+				bool instantiable = !ClassDB::is_virtual(p_class) && ClassDB::can_instantiate(p_class);
+				if (!instantiable) {
+					if (ClassDB::is_parent_class(p_class, SNAME("Node"))) {
+						return theme->get_icon("NodeDisabled", EditorStringName(EditorIcons));
+					} else {
+						return theme->get_icon("ObjectDisabled", EditorStringName(EditorIcons));
+					}
+				}
+			}
+			StringName parent = ClassDB::get_parent_class_nocheck(p_class);
+			if (parent) {
+				// Skip virtual class if `p_skip_fallback_virtual` is true or `p_class` is instantiable.
+				return _get_class_or_script_icon(parent, "", "", false, true);
 			}
 		}
 	}
@@ -7817,11 +7844,13 @@ EditorNode::EditorNode() {
 		import_shader_file.instantiate();
 		ResourceFormatImporter::get_singleton()->add_importer(import_shader_file);
 
-		Ref<ResourceImporterScene> import_scene = memnew(ResourceImporterScene("PackedScene", true));
-		ResourceFormatImporter::get_singleton()->add_importer(import_scene);
+		Ref<ResourceImporterScene> import_model_as_scene;
+		import_model_as_scene.instantiate("PackedScene");
+		ResourceFormatImporter::get_singleton()->add_importer(import_model_as_scene);
 
-		Ref<ResourceImporterScene> import_animation = memnew(ResourceImporterScene("AnimationLibrary", true));
-		ResourceFormatImporter::get_singleton()->add_importer(import_animation);
+		Ref<ResourceImporterScene> import_model_as_animation;
+		import_model_as_animation.instantiate("AnimationLibrary");
+		ResourceFormatImporter::get_singleton()->add_importer(import_model_as_animation);
 
 		{
 			Ref<EditorSceneFormatImporterCollada> import_collada;
@@ -7885,6 +7914,8 @@ EditorNode::EditorNode() {
 	theme = EditorThemeManager::generate_theme();
 	DisplayServer::set_early_window_clear_color_override(true, theme->get_color(SNAME("background"), EditorStringName(Editor)));
 
+	EDITOR_DEF("_export_preset_advanced_mode", false); // Could be accessed in EditorExportPreset.
+
 	register_exporters();
 
 	ED_SHORTCUT("canvas_item_editor/pan_view", TTRC("Pan View"), Key::SPACE);
@@ -7897,6 +7928,8 @@ EditorNode::EditorNode() {
 	for (const String &E : other_file_ext) {
 		other_file_extensions.insert(E);
 	}
+
+	force_textfile_extensions.insert("csv"); // CSV translation source, has `Translation` resource type, but not loadable as resource.
 
 	resource_preview = memnew(EditorResourcePreview);
 	add_child(resource_preview);
