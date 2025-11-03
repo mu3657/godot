@@ -75,7 +75,7 @@ void ConnectionInfoDialog::popup_connections(const String &p_method, const Vecto
 			TreeItem *node_item = tree->create_item(root);
 
 			node_item->set_text(0, Object::cast_to<Node>(connection.signal.get_object())->get_name());
-			node_item->set_icon(0, EditorNode::get_singleton()->get_object_icon(connection.signal.get_object(), "Node"));
+			node_item->set_icon(0, EditorNode::get_singleton()->get_object_icon(connection.signal.get_object()));
 			node_item->set_selectable(0, false);
 			node_item->set_editable(0, false);
 
@@ -86,7 +86,7 @@ void ConnectionInfoDialog::popup_connections(const String &p_method, const Vecto
 			node_item->set_editable(1, false);
 
 			node_item->set_text(2, Object::cast_to<Node>(connection.callable.get_object())->get_name());
-			node_item->set_icon(2, EditorNode::get_singleton()->get_object_icon(connection.callable.get_object(), "Node"));
+			node_item->set_icon(2, EditorNode::get_singleton()->get_object_icon(connection.callable.get_object()));
 			node_item->set_selectable(2, false);
 			node_item->set_editable(2, false);
 		}
@@ -1242,7 +1242,9 @@ void ScriptTextEditor::_breakpoint_item_pressed(int p_idx) {
 }
 
 void ScriptTextEditor::_breakpoint_toggled(int p_row) {
-	EditorDebuggerNode::get_singleton()->set_breakpoint(script->get_path(), p_row + 1, code_editor->get_text_editor()->is_line_breakpointed(p_row));
+	const CodeEdit *ce = code_editor->get_text_editor();
+	bool enabled = p_row < ce->get_line_count() && ce->is_line_breakpointed(p_row);
+	EditorDebuggerNode::get_singleton()->set_breakpoint(script->get_path(), p_row + 1, enabled);
 }
 
 void ScriptTextEditor::_on_caret_moved() {
@@ -3164,7 +3166,8 @@ void ScriptTextEditor::register_editor() {
 	ED_SHORTCUT("script_text_editor/goto_function", TTRC("Go to Function..."), KeyModifierMask::ALT | KeyModifierMask::CTRL | Key::F);
 	ED_SHORTCUT_OVERRIDE("script_text_editor/goto_function", "macos", KeyModifierMask::CTRL | KeyModifierMask::META | Key::J);
 
-	ED_SHORTCUT("script_text_editor/goto_line", TTRC("Go to Line..."), KeyModifierMask::CMD_OR_CTRL | Key::L);
+	ED_SHORTCUT("script_text_editor/goto_line", TTRC("Go to Line..."), KeyModifierMask::CMD_OR_CTRL | Key::G);
+	ED_SHORTCUT_OVERRIDE("script_text_editor/goto_line", "macos", KeyModifierMask::CMD_OR_CTRL | Key::L);
 	ED_SHORTCUT("script_text_editor/goto_symbol", TTRC("Lookup Symbol"));
 
 	ED_SHORTCUT("script_text_editor/toggle_breakpoint", TTRC("Toggle Breakpoint"), Key::F9);
